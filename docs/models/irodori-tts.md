@@ -62,6 +62,7 @@ speech voice Irodori-TTS-859M-v4.1-F16.gguf my-speaker.speaker.safetensors my-sp
 | `seconds` | none | 0.5 to 30: fixes the length instead of predicting it |
 | `duration_scale` | 1 | above 0: multiplies the predicted length |
 | `speed` | 1 | 0.25 to 4: divides the length, as [Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server) does with OpenAI's `speed` |
+| `max_seconds_per_char` | 0.16 | 0 or more: for a text of at most 16 characters, caps a predicted length at this many seconds per character (at speed 1); 0 leaves the prediction alone |
 | `instructions` | `""` | the voice and the way of speaking in words, at most 512 tokens |
 | `keep_tail` | false | keep the whole length, rather than end where the speech goes silent |
 | `tail_window_size`, `tail_std_threshold`, `tail_mean_threshold` | 20, 0.05, 0.1 | how silence is found: this many frames with a spread and a mean under these |
@@ -90,6 +91,14 @@ A request speaks at most 30 s. A text whose speech the model predicts to last lo
 30 s, so a request should be one sentence; `speech tts` and `speech serve` speak a longer text a sentence at a time, and
 the worker cuts a text it is refused after its sentences, its commas or its spaces. A
 `speed` above 1 that brings the length within 30 s is followed.
+
+## Short texts
+
+A very short text with a reference voice can be predicted far longer than the words need. The extra frames are filled
+with speech that is not in the text. `max_seconds_per_char` (0.16 by default) caps the predicted length for a text of
+at most 16 characters at that many seconds per character, divided by `speed` and multiplied by `duration_scale`.
+Longer text keeps the predictor's length. Set the option to 0 for the predictor alone, or raise it when a short line
+should breathe more. Fixed `seconds` ignore it.
 
 ## Long sentences
 

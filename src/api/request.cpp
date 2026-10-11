@@ -43,6 +43,7 @@ bool neutral(speech_option option, const OptionValue & value) {
     switch (option) {
         case SPEECH_OPT_SPEED:
         case SPEECH_OPT_DURATION_SCALE: return std::get<double>(value) == 1;
+        case SPEECH_OPT_MAX_SECONDS_PER_CHAR: return std::get<double>(value) == 0;
         case SPEECH_OPT_LANGUAGE: return language_is_auto(std::get<std::string>(value));
         case SPEECH_OPT_TIMESTAMPS: return !std::get<bool>(value);
         case SPEECH_OPT_PROMPT:
@@ -77,9 +78,12 @@ void check(const speech_request & request, speech_option option, speech_type typ
     if (!spec) {
         if (neutral(option, value)) return;
         if (const Lack * lack = file.lack(option)) throw ApiError(SPEECH_ERROR_UNSUPPORTED, lack->message, name);
-        throw ApiError(SPEECH_ERROR_UNSUPPORTED, file.identity.name + " does not take the option " + name +
-                                                     (option == SPEECH_OPT_SPEED || option == SPEECH_OPT_DURATION_SCALE ? " but at 1" : "") +
-                                                     "; leave it out",
+        throw ApiError(SPEECH_ERROR_UNSUPPORTED,
+                       file.identity.name + " does not take the option " + name +
+                           (option == SPEECH_OPT_SPEED || option == SPEECH_OPT_DURATION_SCALE
+                                ? " but at 1"
+                                : option == SPEECH_OPT_MAX_SECONDS_PER_CHAR ? " but at 0" : "") +
+                           "; leave it out",
                        name);
     }
     if (type == SPEECH_TYPE_INT || type == SPEECH_TYPE_FLOAT) {
