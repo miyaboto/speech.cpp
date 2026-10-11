@@ -70,7 +70,8 @@ int check_library(void) {
                                      "rescale_k", "rescale_sigma", "speaker_uncond_mode", "sway_coeff", "keep_tail",
                                      "tail_window_size", "tail_std_threshold", "tail_mean_threshold", "speaker_kv_scale",
                                      "speaker_kv_min_t", "speaker_kv_max_layers", "cfg_scale_instructions", "threshold",
-                                     "min_speech_duration_ms", "min_silence_duration_ms", "speech_pad_ms", "max_speech_duration_s"};
+                                     "min_speech_duration_ms", "min_silence_duration_ms", "speech_pad_ms", "max_speech_duration_s",
+                                     "max_seconds_per_char"};
     if (speech_option_count() != sizeof options / sizeof options[0]) {
         fprintf(stderr, "FAIL: the library knows %zu options\n", speech_option_count());
         return 1;
@@ -255,6 +256,7 @@ static speech_status set_neutral(speech_request * r, speech_option option, int *
     switch (option) {
         case SPEECH_OPT_SPEED:
         case SPEECH_OPT_DURATION_SCALE: return speech_request_set_float(r, option, 1.0);
+        case SPEECH_OPT_MAX_SECONDS_PER_CHAR: return speech_request_set_float(r, option, 0.0);
         case SPEECH_OPT_LANGUAGE: return speech_request_set_string(r, option, "auto");
         case SPEECH_OPT_TIMESTAMPS: return speech_request_set_bool(r, option, 0);
         case SPEECH_OPT_PROMPT:

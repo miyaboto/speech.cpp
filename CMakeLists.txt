@@ -297,6 +297,9 @@ target_link_libraries(irodori-text-check PRIVATE irodoritts)
 add_executable(irodori-window-check checks/irodori-tts/irodori-window-check.cpp)
 target_link_libraries(irodori-window-check PRIVATE irodoritts)
 
+add_executable(irodori-duration-check checks/irodori-tts/irodori-duration-check.cpp)
+target_link_libraries(irodori-duration-check PRIVATE irodoritts)
+
 add_executable(irodori-codec-check checks/irodori-tts/irodori-codec-check.cpp tools/common/json-reader.cpp)
 target_include_directories(irodori-codec-check PRIVATE checks tools/common)
 target_link_libraries(irodori-codec-check PRIVATE irodoritts)

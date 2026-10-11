@@ -43,6 +43,7 @@ public:
         r.length.seconds = values.has(SPEECH_OPT_SECONDS) ? values.number(SPEECH_OPT_SECONDS) : 0;
         r.length.duration_scale = values.number(SPEECH_OPT_DURATION_SCALE);
         r.length.speed = values.number(SPEECH_OPT_SPEED);
+        r.length.max_seconds_per_char = values.number(SPEECH_OPT_MAX_SECONDS_PER_CHAR);
         // An RF file alone declares the guidance, and with it a default of every option of it that has one.
         if (values.has(SPEECH_OPT_CFG_SCALE_TEXT)) r.guidance = guidance(values);
         r.tail.emplace();
@@ -142,7 +143,8 @@ struct TokenCounter {
  * guidance and the cut at the tail its file gives. Its one voice of its own is none, which speaks without a reference,
  * where the file holds the null speaker; a request otherwise speaks in a voice added since loading. Its one language
  * is checked and not used. It fixes the length before it makes the speech, so it takes seconds and a scale of the
- * predicted length rather than max_seconds. An RF model takes the official runtime's guidance, schedule and scaling of
+ * predicted length rather than max_seconds, and a text-length cap on that prediction so that a short text with a
+ * reference does not speak past the words. An RF model takes the official runtime's guidance, schedule and scaling of
  * the speaker, which a MeanFlow model folded into its training or ignores and does not take. A file with the caption's
  * encoder takes instructions, the runtime's caption, and an RF one the caption's scale.
  */
@@ -210,6 +212,11 @@ FamilyInfo describe_irodori_tts(const std::shared_ptr<const ModelFile> & file) {
         });
     }
     if (rf && caption) info.options.push_back(float32({SPEECH_OPT_CFG_SCALE_INSTRUCTIONS, false, true, (double) m.f32(s + "cfg_caption"), 0, INFINITY}));
+    // After every earlier option of the vocabulary. Short Japanese with a reference is often predicted far longer
+    // than the text; 0.16 s per character, only while the text is at most 16 characters, cuts the extra frames that
+    // fill with speech not in the text, and leaves ordinary sentences at their prediction (v4.1-Small-MF, CPU,
+    // 2026-10-11). 0 turns the bound off.
+    info.options.push_back({SPEECH_OPT_MAX_SECONDS_PER_CHAR, false, true, 0.16, 0, INFINITY});
     const auto counter = std::make_shared<Lazy<TokenCounter>>(file);
     info.count_tokens = [counter](const std::string & text) { return counter->get().count(text); };
     return info;

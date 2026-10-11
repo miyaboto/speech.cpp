@@ -238,7 +238,7 @@ it concerns (an option's name, `text`, `audio`, `device`, `threads`, `name`, `pa
   may be read from any thread. Separate models are independent.
 - **Versions.** `speech_version()` gives the release the library was built from (`"0.8.3"`). `SPEECH_API_VERSION_MAJOR`
   and `SPEECH_API_VERSION_MINOR`, and `speech_api_version_major()` and `speech_api_version_minor()` for a caller that
-  loads the library at run time, give the API's version, 3.1. The major rises when a declaration changes in a way an
+  loads the library at run time, give the API's version, 3.2. The major rises when a declaration changes in a way an
   existing caller notices, and the minor when a function, an option or an enum value is added. A program built against
   M.m runs against a library of the same major version and a minor version of m or more. The shared library's SOVERSION
   is the major version (`libspeech.3.dylib`, `libspeech.so.3`).
@@ -255,7 +255,7 @@ Each model takes some of them, with ranges and defaults from its file, and `spee
 | `voice` | string | none | [Qwen3-TTS](models/qwen3-tts.md#options), [Irodori-TTS](models/irodori-tts.md#options); required |
 | `language` | string | `auto` | every model but Silero VAD, which takes `auto` alone |
 | `seed` | int | none | Qwen3-TTS, Irodori-TTS |
-| `speed`, `seconds`, `duration_scale`, `steps` | float, float, float, int | 1, none, 1, none | Irodori-TTS |
+| `speed`, `seconds`, `duration_scale`, `max_seconds_per_char`, `steps` | float, float, float, float, int | 1, none, 1, 0, none | Irodori-TTS |
 | `max_seconds` | float | none | Qwen3-TTS |
 | `timestamps` | bool | false | [FastConformer](models/fastconformer.md#options) |
 | `prompt` | string | `""` | [Qwen3-ASR](models/qwen3-asr.md#options) |

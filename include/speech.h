@@ -62,7 +62,7 @@ extern "C" {
  * version and a minor version of m or more. Version 3.0 is first released with speech.cpp 0.7.0, the option prompt
  * included, and a declaration added since says the version that added it.
  */
-#define SPEECH_API_VERSION_MINOR 1
+#define SPEECH_API_VERSION_MINOR 2
 
 /** The SPEECH_API_VERSION_MAJOR the library was built with, for a caller that loads it at run time. */
 SPEECH_API int speech_api_version_major(void);
@@ -394,7 +394,13 @@ typedef enum speech_option {
      * model's least (98 ms for Silero VAD), the next region beginning where that silence ended, or, without one, at the
      * chunk that reaches the limit. Without it a region has no limit. Added in 3.1.
      */
-    SPEECH_OPT_MAX_SPEECH_DURATION_S = 43
+    SPEECH_OPT_MAX_SPEECH_DURATION_S = 43,
+    /**
+     * "max_seconds_per_char", a number of 0 or more: the most seconds of predicted speech per Unicode character of the
+     * text, at speed 1, which bounds a length the duration predictor overestimates for a short text (at most 16
+     * characters); 0 (the neutral value) leaves the prediction alone. Fixed seconds ignore it. Added in 3.2.
+     */
+    SPEECH_OPT_MAX_SECONDS_PER_CHAR = 44
 } speech_option;
 
 /** The type of an option's values, which names the setter that takes them. */

@@ -20,9 +20,10 @@ the model finished from one a limit cut, and to repeat a request whose audio it 
 
 ## Decision
 
-- **A request carries `speed`, `seconds` and `duration_scale`, and a model takes each only where its official
-  implementation can.** A model that does not take one refuses any value of it as `unsupported`, but for the neutral
-  speed and duration scale of 1.
+- **A request carries `speed`, `seconds`, `duration_scale` and `max_seconds_per_char`, and a model takes each only where
+  it can follow it.** A model that does not take one refuses any value of it as `unsupported`, but for the neutral speed
+  and duration scale of 1 and the neutral max_seconds_per_char of 0. `max_seconds_per_char` is speech.cpp's bound on a
+  predicted length; the official runtime has no such field.
 - **Irodori-TTS follows the runtime for `seconds` and `duration_scale` and Irodori-TTS-Server for `speed`**, which
   divides whichever length applies. The bounds of the length and of the speed are the file's (`irodori-tts.length.*`).
   Where the runtime goes on quietly, speech.cpp refuses: seconds outside the bounds, seconds together with a duration
@@ -33,6 +34,14 @@ the model finished from one a limit cut, and to repeat a request whose audio it 
   the bounds is followed, since the caller asked for that rate; one that takes a predicted length within the bounds past
   them is refused naming that option, as above. Seconds the caller fixes keep their meaning. A prediction under the
   shortest length is raised to it, as the runtime raises it, which adds silence and loses nothing.
+- **Irodori-TTS also takes `max_seconds_per_char`**, which caps a predicted length at that many seconds per Unicode
+  character of the normalized text, times the duration scale and over the speed, while the text is at most 16
+  characters. Short Japanese with a reference voice is often predicted far longer than the text ("もしもし、" at about
+  2.8 s with speed 1.2 where about 0.8 s holds the words; v4.1-Small-MF, CPU, seed 42, 2026-10-11), and the extra
+  frames are filled with speech that is not in the text; the official runtime shows the same class of defect. The
+  default is 0.16, which cuts those extras; longer text is left at the prediction so a tight per-character bound does
+  not shorten an ordinary sentence; 0 turns the bound off. Fixed seconds ignore it. The bound is speech.cpp's, not the
+  runtime's.
 - **Qwen3-TTS takes `max_seconds`**, the longest the speech may be, and stops at its file's limit of frames otherwise.
   Its cache grows with the request, so that a sentence costs the memory of its own length. Irodori-TTS does not take
   `max_seconds`, since it fixes the length before it makes the speech.
@@ -57,10 +66,15 @@ The alternatives were turned down:
 - A cap kept by the caller, which cancels the request. It cannot tell its stop from the model's, and wastes the frames
   after it.
 - A limit of frames in the C++ below the checkpoint's. A long text the model would finish would be cut.
+- Leaving short over-predictions to the caller through `seconds` alone. Every short chunk of a turn-taking agent would
+  need a length of its own, and the default path would keep speaking junk after the text.
+- Trimming the tail more aggressively. The default cut never ends v4.1's latent, whose silence has a standard deviation
+  near 0.7, and the over-predicted frames hold speech rather than silence, so a lower threshold would not remove them.
 
 ## Consequences
 
 A caller learns from the model information which of the options a model takes, with their ranges, and from the upper
 bound of `seconds` the longest an Irodori-TTS request speaks. A text of a few sentences can pass Irodori-TTS's 30 s, so a
-caller speaks such a text a sentence at a time; the refusal comes before any progress or audio. A Qwen3-TTS request
+caller speaks such a text a sentence at a time; the refusal comes before any progress or audio. Short chunks of a
+turn-taking agent need no hand-tuned `seconds` while `max_seconds_per_char` stays at its default. A Qwen3-TTS request
 without `max_seconds` can run to 655 s, so a caller that knows a plausible length sends it as `max_seconds`.

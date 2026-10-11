@@ -152,10 +152,12 @@ size_t Synthesizer::synthesize(const Request & r, const Voice & voice, const Aud
     std::vector<float> text_state, caption_state;
     float predicted = 0;
     int tokens = 0, caption_tokens = 0;
+    size_t text_chars = 0;
     {
         Timer t{st.text};
         const std::string text = normalize_text(r.text);
         if (text.empty()) throw Error(Fault::InvalidArgument, "the text is empty after normalization; give a text to speak", "text");
+        text_chars = duration_text_chars(text);
         const std::vector<int32_t> ids = tokenizer_.encode(text);
         tokens = (int) ids.size();
         if (tokens > text_.max_tokens()) {
@@ -194,7 +196,7 @@ size_t Synthesizer::synthesize(const Request & r, const Voice & voice, const Aud
         if (caption_condition) caption_state = Graph::read(caption_condition);
         if (sum) predicted = Graph::read(sum)[0];
     }
-    const Length length = duration_.length(r.length, predicted);
+    const Length length = duration_.length(r.length, predicted, text_chars);
     const int frames = length.frames;
     std::vector<float> x;
     {

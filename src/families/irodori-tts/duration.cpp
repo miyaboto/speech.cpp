@@ -8,6 +8,7 @@
 
 #include "error.h"
 #include "layers.h"
+#include "utf8.h"
 
 namespace irodori {
 
@@ -57,6 +58,21 @@ std::string number(double v) {
 
 }  // namespace
 
+size_t duration_text_chars(const std::string & normalized) {
+    const std::optional<std::vector<uint32_t>> points = decode_utf8(normalized);
+    if (!points) throw Error(Fault::InvalidArgument, "the text is not well-formed UTF-8; give UTF-8 text to speak", "text");
+    return points->size();
+}
+
+std::optional<int> duration_text_cap_frames(const LengthOptions & o, size_t chars, int hop, int sample_rate) {
+    if (!(o.max_seconds_per_char > 0) || chars == 0 || chars > kDurationCapMaxChars || hop <= 0 || sample_rate <= 0) {
+        return std::nullopt;
+    }
+    const double seconds = (double) chars * o.max_seconds_per_char * (o.duration_scale / o.speed);
+    const double frames = std::nearbyint(seconds * sample_rate / (double) hop);
+    return std::max(1, (int) frames);
+}
+
 void DurationPredictor::check(const LengthOptions & o) const {
     if (!(o.speed >= min_speed_ && o.speed <= max_speed_)) {
         throw Error(Fault::OutOfRange, "the speed is " + number(o.speed) + "; Irodori-TTS takes a speed from " + number(min_speed_) + " to " +
@@ -66,6 +82,12 @@ void DurationPredictor::check(const LengthOptions & o) const {
     if (!(o.duration_scale > 0 && std::isfinite(o.duration_scale))) {
         throw Error(Fault::OutOfRange, "the duration scale is " + number(o.duration_scale) + "; give a factor above 0, 1 for the predicted length",
                     "duration_scale");
+    }
+    if (!(o.max_seconds_per_char >= 0 && std::isfinite(o.max_seconds_per_char))) {
+        throw Error(Fault::OutOfRange,
+                    "the most seconds per character is " + number(o.max_seconds_per_char) +
+                        "; give 0 to leave the predicted length alone, or a length of 0 or more per character of the text",
+                    "max_seconds_per_char");
     }
     if (o.seconds == 0) return;
     if (!(o.seconds >= min_seconds_ && o.seconds <= max_seconds_)) {
@@ -86,7 +108,7 @@ void DurationPredictor::check(const LengthOptions & o) const {
     }
 }
 
-Length DurationPredictor::length(const LengthOptions & o, float predicted_sum) const {
+Length DurationPredictor::length(const LengthOptions & o, float predicted_sum, size_t text_chars) const {
     check(o);
     // Irodori-TTS-Server divides both the fixed seconds and the duration scale by OpenAI's speed
     // (Aratako/Irodori-TTS-Server@61012c760f22f7b4a6c21c5c5f8f9e148120b6f9, src/irodori_openai_tts/app.py).
@@ -97,7 +119,12 @@ Length DurationPredictor::length(const LengthOptions & o, float predicted_sum) c
     const float predicted = std::expm1(std::log1p(std::max(predicted_sum, 0.0f)));
     const double seconds_per_frame = (double) hop_ / sample_rate_;
     const bool own_rate = o.duration_scale == 1 && o.speed == 1;
-    const double frames = std::nearbyint((double) predicted * (o.duration_scale / o.speed));
+    double frames = std::nearbyint((double) predicted * (o.duration_scale / o.speed));
+    if (const std::optional<int> cap = duration_text_cap_frames(o, text_chars, hop_, sample_rate_)) {
+        // A cap below the shortest length still yields that length, as a short prediction does at the model's own rate.
+        const double limit = (double) std::max(min_frames_, *cap);
+        if (frames > limit) frames = limit;
+    }
     // The runtime bounds a longer prediction to the longest length, and the speech squeezed into it loses words: in the
     // voice none, eight short sentences predicted at 30.7 s lost two of them in 30 s, and three times that text,
     // predicted at 47 s, gave no word a recognizer found (v4.1-Small, 2026-10-08). A speed or a scale that brings the
