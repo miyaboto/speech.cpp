@@ -29,6 +29,7 @@ const Storage kMatrix = quantized_storage({{GGML_TYPE_F32, kFirstLayoutRelease},
                                            {GGML_TYPE_Q6_K, "0.8.0"},
                                            {GGML_TYPE_Q5_K, "0.8.0"},
                                            {GGML_TYPE_Q4_K, "0.8.0"}});
+const Storage kEmbedding = embedding_storage(kMatrix.since);
 const Storage kConv = half_storage();
 const Storage kF32 = float32_storage();
 
@@ -125,7 +126,7 @@ std::vector<TensorSpec> tensors(const ModelFile & m) {
                                  {"proj.1.bias", {d}, kF32},
                                  {"proj.2.weight", {d, h}, kMatrix},
                                  {"proj.2.bias", {h}, kF32},
-                                 {"dec.token_embd", {h, vocab}, kMatrix}};
+                                 {"dec.token_embd", {h, vocab}, kEmbedding}};
     for (int i = 1; i <= kConvLayers; i++) {
         if (i > 1) t.push_back({"enc.conv." + std::to_string(i) + ".weight", {k, k, channels, channels}, kConv});
         t.push_back({"enc.conv." + std::to_string(i) + ".bias", {channels}, kF32});

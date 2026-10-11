@@ -49,7 +49,7 @@ Storage float32_storage() {
     return {choices, {{GGML_TYPE_F32, kFirstLayoutRelease}}};
 }
 
-Storage quantized_storage(std::vector<Since> since) {
+Storage embedding_storage(std::vector<Since> since) {
     return {{
                 {GGML_TYPE_F32, {GGML_TYPE_F32}},
                 {GGML_TYPE_F16, {GGML_TYPE_F16}},
@@ -59,6 +59,12 @@ Storage quantized_storage(std::vector<Since> since) {
                 {GGML_TYPE_Q4_K, {GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_F16}},
             },
             std::move(since)};
+}
+
+Storage quantized_storage(std::vector<Since> since) {
+    Storage s = embedding_storage(std::move(since));
+    s.product_alone = true;
+    return s;
 }
 
 Storage half_storage() {

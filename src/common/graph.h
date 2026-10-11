@@ -5,14 +5,21 @@
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 /**
  * A matrix product that asks for float32 accumulation. Vulkan otherwise accumulates in half precision on
  * GPUs that have it; the CPU and Metal ignore the request (Metal rounds the inputs of its matrix kernel to
- * half precision either way).
+ * half precision either way). A weight the CPU holds in a buffer type of its own, packed for its product
+ * (ModelFile), is multiplied by a contiguous float32 activation: ggml's AMX kernel reads the activation's
+ * rows at the weight's width apart and does not look at its strides or type.
  */
 inline ggml_tensor * mul_mat(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
+    if (a->buffer && ggml_backend_buffer_is_host(a->buffer) && ggml_backend_buffer_get_type(a->buffer) != ggml_backend_cpu_buffer_type()) {
+        if (b->type != GGML_TYPE_F32) b = ggml_cast(ctx, b, GGML_TYPE_F32);
+        else if (!ggml_is_contiguous(b)) b = ggml_cont(ctx, b);
+    }
     ggml_tensor * t = ggml_mul_mat(ctx, a, b);
     ggml_prec_set_acc(t, GGML_PREC_F32);
     return t;

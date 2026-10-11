@@ -29,7 +29,7 @@ writes the released F16 and Q8_0 files byte for byte (`checks/compare/quantize_c
   the types the tensor takes in order, of which the file holds it in the first whose blocks its rows are whole blocks
   of. The reader takes a tensor in any of its storage's types, so that the choice can change without refusing the files
   made before; `speech quantize` writes the one the order gives. Three kinds of storage serve the families:
-  `quantized_storage()` for a matrix or embedding that only `ggml_mul_mat()` and `ggml_get_rows()` read, `half_storage()`
+  `quantized_storage()` for a matrix that only `ggml_mul_mat()` reads and `embedding_storage()` for one `ggml_get_rows()` reads too, stored alike, `half_storage()`
   for Qwen3-TTS's codec and Qwen3-ASR's convolution kernels, F16 in every file but an F32 one, as the released files
   hold them, and `float32_storage()` for the rest, every tensor of Silero VAD among them. Nothing else chooses a type,
   and a type that would leave most of a file's bytes in another type, as every type does with Silero VAD's, is refused

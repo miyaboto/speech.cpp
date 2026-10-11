@@ -26,6 +26,7 @@ const Storage kMatrix = quantized_storage({{GGML_TYPE_F32, kFirstLayoutRelease},
                                            {GGML_TYPE_Q6_K, "0.8.0"},
                                            {GGML_TYPE_Q5_K, "0.8.0"},
                                            {GGML_TYPE_Q4_K, "0.8.0"}});
+const Storage kEmbedding = embedding_storage(kMatrix.since);
 const Storage kF32 = float32_storage();
 
 /**
@@ -156,7 +157,7 @@ std::vector<TensorSpec> model_tensors(const ModelFile & m) {
     }
 
     const int64_t th = text_hidden, td = text_dim, cd = caption_dim, sd = speaker_dim, xd = dit_dim, ld = latent;
-    std::vector<TensorSpec> t = {{"text.embd", {th, (int64_t) pieces}, kMatrix},
+    std::vector<TensorSpec> t = {{"text.embd", {th, (int64_t) pieces}, kEmbedding},
                                  {"text.embd_norm", {th}, kF32},
                                  {"text.final_norm", {th}, kF32},
                                  {"speaker.in_proj.weight", {ld * patch, sd}, kMatrix},
