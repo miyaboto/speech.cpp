@@ -117,8 +117,9 @@ speech tts irodori-tts-mf --voice none --instructions "低く落ち着いた男�
 ## Streaming
 
 The model makes a sentence's whole speech before any audio, then decodes it in windows and passes each one on: the first
-0.48 s, then windows sized to stay ahead of playback. The windows do not change the audio, so a seed repeats its
-samples.
+0.48 s, then windows sized to stay ahead of playback. When the codec is slower than real time, the rest of the sentence
+is decoded in one window so that the margins around each window are not decoded again. The windows do not change the
+audio, so a seed repeats its samples.
 
 ## Accuracy
 
@@ -147,3 +148,42 @@ speech-bench on 2026-10-08: the 20 sentences of its `prompts/speak-ja-JP.json` i
 The first audio waits for the whole sentence's sampling, so it grows with the sentence. v4.1-Small's default of 40
 steps takes about 2.4 times as long as 16. The worker takes 2.2 GB of memory with F16 weights, and 1.5 GB with Q8_0,
 which speaks as fast.
+
+### CPU-only Linux
+
+On a machine without a GPU the codec, not the MeanFlow sampler, usually takes most of the time. Profile the stages with
+`irodori-timing` (built with the checks) and reproduce the table with `measure/irodori_cpu_bench.py`:
+
+```sh
+cmake -B build -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF
+cmake --build build -j --target irodori-timing speech-cli
+python3 measure/irodori_cpu_bench.py --timing build/irodori-timing --speech build/speech \
+  --model Irodori-TTS-866M-MF-v4.1-F16.gguf --runs 3 --asr qwen3-asr-0.6b
+```
+
+Measured on 2026-10-11 on an Intel Xeon under KVM (CPU flags include AVX-512 and AMX, 4 vCPU, 15 GB RAM), F16,
+`--device cpu`, voice `none`, seed 7, speed 1.2, release-style AVX2 build (`-DGGML_NATIVE=OFF`), median of 3 runs.
+CER is Qwen3-ASR 0.6B on the same WAVs (spaces and punctuation stripped). The window-size change does not alter the
+audio of a seed.
+
+| | First audio | Total | RTF | text | sampling | codec | CER |
+|---|---|---|---|---|---|---|---|
+| **もしもし…** before (48-frame ceiling when slow) | 2.191 s | 5.524 s | 1.517 | 0.052 s | 1.462 s | 4.009 s | 17.4% |
+| **もしもし…** after (rest in one window when slow) | 2.199 s | 5.002 s | 1.374 | 0.053 s | 1.466 s | 3.484 s | 17.4% |
+| **ありがとうございます…** before | 2.663 s | 7.612 s | 1.547 | 0.052 s | 1.934 s | 5.623 s | 0.0% |
+| **ありがとうございます…** after | 2.668 s | 6.521 s | 1.325 | 0.055 s | 1.938 s | 4.530 s | 0.0% |
+
+With `--steps 2` on the same after build, first audio fell to 1.52 s / 1.70 s and RTF to about 1.2, but the first
+sentence's CER rose to 30.4% (Qwen3-ASR heard 「みやこと様」). Prefer the default 4 steps unless a shorter first audio
+is worth that risk.
+
+What else was tried on that machine:
+
+| Change | How to enable | Effect |
+|---|---|---|
+| Rest of the sentence in one codec window when slower than real time | default | about 13–14% lower RTF; first audio unchanged |
+| Enough CPU threads | `--threads N` (defaults to the machine's cores) | almost linear up to the core count |
+| Release AVX2 build | `cmake -B build -DGGML_NATIVE=OFF`, or the `linux-x64-cpu` archive | lower codec time than `-march=native` here |
+| Native CPU build | `cmake -B build` (`GGML_NATIVE` on by default) | faster sampling; slower codec on this Xeon |
+| OpenMP | `-DGGML_OPENMP=ON` | no gain here |
+| Q8_0 weights | `speech quantize` from an F32 file | not measured (Hugging Face ships F16 only) |

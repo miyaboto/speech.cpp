@@ -116,7 +116,8 @@ public:
 
     /**
      * How the decoder sizes its windows, a short first one of 12 frames, which brings the first audio early, and the
-     * later ones as it measures its speed, for a codec's frames (synthesizer.cpp says why).
+     * later ones as it measures its speed, taking every frame left when decoding is slower than real time, for a
+     * codec's frames (synthesizer.cpp says why).
      */
     static WindowRule window_rule(int hop, int sample_rate);
 

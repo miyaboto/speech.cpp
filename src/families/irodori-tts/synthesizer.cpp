@@ -74,8 +74,9 @@ int TailCut::flattening_point(const std::vector<float> & latent, int frames, int
  * Each window decodes 10 frames on either side of its own (Codec::kDecoderMargin): 12 frames decode 32, 24 decode 44
  * and 48 decode 68. A floor of 24 halves the wait for a window against 48 for 29% more decoding per second of audio,
  * where 12 would cost 88% more, which a machine that decodes 48-frame windows barely faster than real time could not
- * afford. The ceiling is 48, 0.7.1's window, so that a cancel and the silence between a worker's chunks never wait
- * longer than they did.
+ * afford. The ceiling is 48, 0.7.1's window, while decoding still gains on the listener, so that a cancel and the
+ * silence between a worker's chunks stay bounded when the stream keeps up. When decoding is slower than real time,
+ * next_window() takes every frame left instead, so that the margins are not decoded again in pieces.
  *
  * The sizes may follow the clock because the audio does not depend on them: the decoder is convolutions without a
  * cache, and a margin of 10 frames covers its receptive field of 7.7, so decoding in windows of any sizes gives the

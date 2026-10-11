@@ -7,7 +7,7 @@
 // left; the fast
 // machine keeps 0.7.1's 48 frames with the margin in hand; the slow one never runs dry, where 48-frame windows do; the
 // one that slows to where 24-frame windows are slower than real time and 48-frame ones are not keeps the ceiling and
-// never runs dry; and the one slower than real time takes the ceiling.
+// never runs dry; and the one slower than real time takes every frame left after the first window.
 //
 // usage: irodori-window-check
 
@@ -95,7 +95,7 @@ int main() {
         {"time in hand for the ceiling", {12, 100, 2.4, 0.4, 0.005}, 48},
         {"time for 33 frames and some", {12, 100, 0.48, 0.0, 0.0071}, 33},
         {"no time for the floor, decoding faster than real time at it", {12, 100, 0.48, 0.45, 0.005}, 24},
-        {"no time for the floor, decoding slower than real time at it", {12, 100, 0.48, 0.45, 0.03}, 48},
+        {"no time for the floor, decoding slower than real time at it", {12, 100, 0.48, 0.45, 0.03}, 100},
         {"fewer frames left than the floor", {60, 10, 0.48, 0.0, 0.005}, 10},
         {"fewer frames left than fit", {60, 30, 2.4, 0.4, 0.005}, 30},
     };
@@ -123,7 +123,8 @@ int main() {
             if (name == "half as fast") ok = ok && adaptive.dry == 0 && fixed.dry > 0;
             if (name == "as fast, then a sixth as fast") ok = ok && adaptive.dry == 0 && adaptive.windows == fixed.windows;
             if (name == "slower than real time") {
-                for (size_t i = 1; i + 1 < adaptive.windows.size(); i++) ok = ok && adaptive.windows[i] == rule.ceiling;
+                // After the first window, one window holds every frame left so the margins are decoded once.
+                ok = ok && adaptive.windows.size() == 2 && adaptive.windows[1] == frames - adaptive.windows[0];
             }
         }
     }

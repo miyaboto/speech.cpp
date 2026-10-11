@@ -14,11 +14,15 @@ lasts. Measured through the worker on speech-bench's 20 Japanese sentences on 20
   the codec. A call of the codec took about 16 ms on the M5's Metal whether it decoded 1 frame or 4 (a rough measure on
   a shared GPU).
 - Irodori-TTS makes a sentence's whole latent, then its codec decodes it in windows and passes each on, each window
-  with 10 frames on either side decoded and dropped: 12 frames decode 32, 24 decode 44, 48 decode 68. With 12 frames
+  with 10 frames on either side decoded and dropped: 12 frames decode 32, 24 decode 44 and 48 decode 68. With 12 frames
   (0.48 s) first and then 48 at a time, the second window came 0.288 s after the first on the M5, with 0.19 s of the
   first window's audio left to play, and 0.32 s after it on the RTX 2080; a machine about half as fast as the M5 would
   run dry between them in every sentence. The decoder is convolutions without a cache, and the margin of 10 frames
   covers its receptive field of 7.7, so decoding in windows of any sizes gives the samples of one decode, bit for bit.
+- On a CPU-only Linux machine where the codec is slower than real time (Intel Xeon under KVM, 4 vCPU, AVX2, F16,
+  2026-10-11), cutting the rest of a 91-frame sentence into 48-frame windows decoded about 131 frames with margins and
+  took 4.2 s of codec time, while one window of every frame left after the first decoded about 101 frames and took
+  3.6 s, with the same first audio.
 
 ## Decision
 
@@ -30,10 +34,12 @@ lasts. Measured through the worker on speech-bench's 20 Japanese sentences on 20
   window is the largest from 24 to 48 frames that the decoder expects to finish while the listener still has 0.1 s in
   hand, the listener taken to play from the first window on and the decoder's time per frame being the running estimate
   of the windows decoded, margins included. Where not even 24 frames finish in time, the window is 24 when decoding at
-  it still gains on the listener and 48 when decoding is slower than real time, since smaller windows would only add
-  margins to decode. 48 frames are never exceeded, so that a cancel and the silence between a worker's chunks stay
-  bounded. The decision is one function without a clock (`next_window()`), which `irodori-window-check` checks on
-  simulated machines.
+  it still gains on the listener, and every frame left when decoding is slower than real time, since cutting the rest
+  into the ceiling would only decode more margins and finish later. While decoding still gains, 48 frames are never
+  exceeded, so that a cancel and the silence between a worker's chunks stay bounded. When decoding is slower than real
+  time, a cancel waits for one remaining decode instead of for several ceiling-sized ones that together decode more.
+  The decision is one function without a clock (`next_window()`), which `irodori-window-check` checks on simulated
+  machines.
 - **Irodori-TTS's sizes may follow the clock because its audio does not depend on them**: `irodori-codec-check` checks
   seven patterns of windows against one decode, bit for bit, on the CPU, Metal and Vulkan (an RTX 2080), so a seed
   repeats its samples whatever the machine's load. Qwen3-TTS's samples depend on the chunking, so its sizes stay fixed.
@@ -51,9 +57,12 @@ The alternatives were turned down:
   second of audio for nothing and break the stream into twice the chunks.
 - A floor of 12 for Irodori-TTS's later windows. It decodes 88% more per second of audio than 48, which a machine that
   decodes 48-frame windows barely faster than real time cannot afford.
+- Keeping the ceiling when decoding is slower than real time. On a CPU slower than real time it only repeats margins
+  and raises the real-time factor, and a cancel still waits for every ceiling-sized window of that slow decode.
 
 ## Consequences
 
 `qwen3-tts-codec-check` compares Qwen3-TTS's decode in chunks with the whole decode as an SNR. A machine that makes
 frames more slowly than the measured ones can still run a player dry, which then buffers. Irodori-TTS's windows of one
-request depend on the machine and its load, and its samples do not.
+request depend on the machine and its load, and its samples do not. On a machine slower than real time, the second
+window of a long sentence can hold every remaining frame, so a cancel after the first window waits for that one decode.

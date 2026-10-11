@@ -176,7 +176,11 @@ int next_window(const WindowRule & rule, const DecodeProgress & p) {
     const double fits = (buffer - rule.margin) / p.seconds_per_frame - 2.0 * rule.context;
     if (fits >= rule.floor) return (int) std::min<double>(most, std::floor(fits));
     const double floor_takes = p.seconds_per_frame * (rule.floor + 2.0 * rule.context);
-    return floor_takes < rule.floor * rule.frame_seconds ? rule.floor : most;
+    // When decoding is slower than real time at the floor, take every frame left: each window still
+    // decodes the margins around it, so cutting the rest into the ceiling only repeats those margins
+    // and finishes later. A cancel then waits for that one remaining decode instead of for several
+    // ceiling-sized ones that together decode more.
+    return floor_takes < rule.floor * rule.frame_seconds ? rule.floor : (int) p.frames_left;
 }
 
 void Codec::decode(const std::vector<float> & latent, int64_t samples, const WindowChoice & choose, const AudioSink & sink) {

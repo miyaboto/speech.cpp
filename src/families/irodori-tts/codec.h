@@ -56,10 +56,10 @@ struct WindowRule {
  * largest size from the floor to the ceiling whose decoding, estimated at `seconds_per_frame` for its frames and its
  * margins, ends before the listener's audio falls below the margin, the listener having the audio sent less the time
  * since the first window was sent, as if playback began with the first window. When not even the floor ends in time,
- * the floor where its decoding still takes less than the audio it gives, which gains on the listener, and the ceiling
- * where decoding is slower than real time, since smaller windows would only decode more margins and fall further
- * behind; the player has to buffer then. It reads no clock, and the result is never past the ceiling or the frames
- * left.
+ * the floor where its decoding still takes less than the audio it gives, which gains on the listener, and every frame
+ * left where decoding is slower than real time, since cutting the rest into the ceiling would only decode more margins
+ * and finish later; the player has to buffer then. It reads no clock. A window that still fits in the listener's audio
+ * is never past the ceiling.
  */
 int next_window(const WindowRule & rule, const DecodeProgress & progress);
 
