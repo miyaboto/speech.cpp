@@ -35,9 +35,24 @@ static int check_irodori_tts(speech_model * model, const speech_model_info * inf
     r = new_request(model, SENTENCE, voice, 5);
     speech_request_set_float(r, SPEECH_OPT_DURATION_SCALE, 50);
     ok &= expect(speak(r, &audio, NULL, NULL), SPEECH_ERROR_OUT_OF_RANGE, "duration_scale", "a predicted length scaled by 50");
-    r = new_request(model, "はい。", voice, 5);
+    // The voice none predicts 「はい。」 under 2 s, so speed 4 falls below the shortest length; a reference often
+    // predicts more and would speak. The text-length cap is off so only the speed bound is under test.
+    audio.n = 0;
+    r = new_request(model, "はい。", "none", 5);
+    speech_request_set_float(r, SPEECH_OPT_MAX_SECONDS_PER_CHAR, 0);
     speech_request_set_float(r, SPEECH_OPT_SPEED, 4);
     ok &= expect(speak(r, &audio, NULL, NULL), SPEECH_ERROR_OUT_OF_RANGE, "speed", "a short predicted length at a speed of 4");
+    // A short text with the default cap is shorter than the uncapped prediction.
+    Audio capped = {NULL, 0, 0}, uncapped = {NULL, 0, 0};
+    r = new_request(model, "もしもし、", voice, 42);
+    ok &= expect(speak(r, &capped, NULL, NULL), SPEECH_OK, NULL, "もしもし、 at the default max_seconds_per_char");
+    r = new_request(model, "もしもし、", voice, 42);
+    speech_request_set_float(r, SPEECH_OPT_MAX_SECONDS_PER_CHAR, 0);
+    ok &= expect(speak(r, &uncapped, NULL, NULL), SPEECH_OK, NULL, "もしもし、 with max_seconds_per_char 0");
+    ok &= capped.n > 0 && capped.n < uncapped.n;
+    printf("もしもし、: %.3f s at the default cap, %.3f s uncapped\n", (double) capped.n / rate, (double) uncapped.n / rate);
+    free(capped.samples);
+    free(uncapped.samples);
 
     Progress progress;
     memset(&progress, 0, sizeof progress);
