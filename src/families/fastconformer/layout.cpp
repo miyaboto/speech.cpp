@@ -24,6 +24,7 @@ const Storage kMatrix = quantized_storage({{GGML_TYPE_F32, kFirstLayoutRelease},
                                            {GGML_TYPE_Q6_K, "0.8.0"},
                                            {GGML_TYPE_Q5_K, "0.8.0"},
                                            {GGML_TYPE_Q4_K, "0.8.0"}});
+const Storage kEmbedding = embedding_storage(kMatrix.since);
 const Storage kF32 = float32_storage();
 
 /** The width of the subsampling's convolutions, NeMo's default, which the encoder pads by 1 on either side. */
@@ -98,7 +99,7 @@ std::vector<TensorSpec> tensors(const ModelFile & m) {
                                  {"sub.conv.0.bias", {channels}, kF32},
                                  {"sub.out.weight", {channels * subsampled_mels, d}, kMatrix},
                                  {"sub.out.bias", {d}, kF32},
-                                 {"pred.embed.weight", {predicted, (int64_t) blank + 1}, kMatrix},
+                                 {"pred.embed.weight", {predicted, (int64_t) blank + 1}, kEmbedding},
                                  {"joint.enc.weight", {d, joint}, kMatrix},
                                  {"joint.enc.bias", {joint}, kF32},
                                  {"joint.pred.weight", {predicted, joint}, kMatrix},

@@ -29,7 +29,7 @@ jobs:
           submodules: recursive
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_NATIVE=OFF -DGGML_LLAMAFILE=ON
           cmake --build build --config Release -j 4
       # The shared library goes in under the name its install name gives, libspeech.<major>.dylib, with the link
       # libspeech.dylib that a program links against; zip -y keeps the link.
@@ -73,7 +73,7 @@ jobs:
       # over two minutes, which the project's own code does not need repeated. The key names Visual Studio's
       # version rather than the runner image's, since consecutive runs land on different image versions.
       CMAKE_OPTIONS: -A x64 -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-      GGML_OPTIONS: -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF
+      GGML_OPTIONS: -DGGML_VULKAN=ON -DGGML_NATIVE=OFF -DGGML_LLAMAFILE=ON -DBUILD_SHARED_LIBS=OFF -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF
     steps:
       - uses: actions/checkout@v6
       - name: Name the ggml build
@@ -168,7 +168,7 @@ jobs:
       # links ggml's static libraries, so they are position-independent, and OpenMP is off so that nothing
       # needs libgomp.
       CMAKE_OPTIONS: -DCMAKE_BUILD_TYPE=Release
-      GGML_OPTIONS: -DGGML_VULKAN=${{ matrix.backend == 'vulkan' && 'ON' || 'OFF' }} -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF
+      GGML_OPTIONS: -DGGML_VULKAN=${{ matrix.backend == 'vulkan' && 'ON' || 'OFF' }} -DGGML_NATIVE=OFF -DGGML_LLAMAFILE=ON -DGGML_OPENMP=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DGGML_BUILD_TESTS=OFF -DGGML_BUILD_EXAMPLES=OFF
     steps:
       - uses: actions/checkout@v6
       - name: Name the ggml build

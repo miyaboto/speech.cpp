@@ -176,39 +176,43 @@ with F16 weights and 1.35 GB with Q8_0, which speaks as fast.
 
 ### CPU-only Linux
 
-On a machine without a GPU the codec, not the MeanFlow sampler, usually takes most of the time. Profile the stages with
+On a machine without a GPU the codec, not the MeanFlow sampler, takes most of the time. Profile the stages with
 `irodori-timing` (built with the checks) and reproduce the table with `measure/irodori_cpu_bench.py`:
 
 ```sh
-cmake -B build -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF
+cmake -B build -DGGML_VULKAN=OFF
 cmake --build build -j --target irodori-timing speech-cli
 python3 measure/irodori_cpu_bench.py --timing build/irodori-timing --speech build/speech \
   --model Irodori-TTS-866M-MF-v4.1-F16.gguf --runs 3 --asr qwen3-asr-0.6b
 ```
 
-Measured on 2026-10-11 on an Intel Xeon under KVM (CPU flags include AVX-512 and AMX, 4 vCPU, 15 GB RAM), F16,
-`--device cpu`, voice `none`, seed 7, speed 1.2, release-style AVX2 build (`-DGGML_NATIVE=OFF`), median of 3 runs.
-CER is Qwen3-ASR 0.6B on the same WAVs (spaces and punctuation stripped). The window-size change does not alter the
-audio of a seed.
+Measured on 2026-10-12 on an Intel Xeon under KVM (8 vCPU, AVX-512 and AMX, 15 GB RAM), `--device cpu`, seed 42,
+speed 1.2, one request at a time through the worker, median of 3 runs, in the voice `none` and in a voice file of one
+3.4 s reference. A build from source is tuned to the CPU it is built on (`GGML_NATIVE`), which here turns on AMX; the
+`linux-x64-cpu` archive is built for every x86-64 CPU with AVX2.
 
-| | First audio | Total | RTF | text | sampling | codec | CER |
-|---|---|---|---|---|---|---|---|
-| **もしもし…** before (48-frame ceiling when slow) | 2.191 s | 5.524 s | 1.517 | 0.052 s | 1.462 s | 4.009 s | 17.4% |
-| **もしもし…** after (rest in one window when slow) | 2.199 s | 5.002 s | 1.374 | 0.053 s | 1.466 s | 3.484 s | 17.4% |
-| **ありがとうございます…** before | 2.663 s | 7.612 s | 1.547 | 0.052 s | 1.934 s | 5.623 s | 0.0% |
-| **ありがとうございます…** after | 2.668 s | 6.521 s | 1.325 | 0.055 s | 1.938 s | 4.530 s | 0.0% |
+| Build | Weights | Voice | もしもし… first audio | total | RTF | ありがとうございます… first audio | total | RTF |
+|---|---|---|---|---|---|---|---|---|
+| from source | F16 | none | 0.69 s | 2.23 s | 0.61 | 0.80 s | 2.73 s | 0.55 |
+| from source | F16 | reference | 0.69 s | 1.91 s | 0.57 | 0.71 s | 2.46 s | 0.58 |
+| from source | Q8_0 | none | 0.46 s | 2.06 s | 0.57 | 0.53 s | 2.54 s | 0.52 |
+| from source | Q8_0 | reference | 0.49 s | 1.92 s | 0.57 | 0.52 s | 2.34 s | 0.55 |
+| AVX2 archive | F16 | none | 0.96 s | 2.87 s | 0.79 | 1.08 s | 3.98 s | 0.81 |
 
-With `--steps 2` on the same after build, first audio fell to 1.52 s / 1.70 s and RTF to about 1.2, but the first
-sentence's CER rose to 30.4% (Qwen3-ASR heard 「みやこと様」). Prefer the default 4 steps unless a shorter first audio
-is worth that risk.
+Of a sentence's time, the sampler takes 0.4 s with F16 weights and 0.2 s with Q8_0 on a CPU with AMX, which packs
+the quantized matrices for its tiles, and the codec the rest. The codec's time grows with the audio; a 30 s sentence
+takes 18 s and 2.4 GB of memory. With Q8_0 weights the sampler reaches another latent from the same seed, so the
+speech is the same text in the same voice with other samples; Qwen3-ASR 0.6B heard one word of the two sentences
+differently in one of four samples. Q8_0 helps only on a CPU with AMX: the AVX2 archive speaks as fast from either file.
+
+With `--steps 2`, first audio falls by about 0.2 s, but the first sentence's CER rose from 17% to 30% (Qwen3-ASR heard
+「みやこと様」). Prefer the default 4 steps unless a shorter first audio is worth that risk.
 
 What else was tried on that machine:
 
 | Change | How to enable | Effect |
 |---|---|---|
-| Rest of the sentence in one codec window when slower than real time | default | about 13–14% lower RTF; first audio unchanged |
-| Enough CPU threads | `--threads N` (defaults to the machine's cores) | almost linear up to the core count |
-| Release AVX2 build | `cmake -B build -DGGML_NATIVE=OFF`, or the `linux-x64-cpu` archive | lower codec time than `-march=native` here |
-| Native CPU build | `cmake -B build` (`GGML_NATIVE` on by default) | faster sampling; slower codec on this Xeon |
+| Enough CPU threads | `--threads N` (defaults to the machine's cores) | 4 threads take 1.7 times as long as 8 |
+| Native CPU build | `cmake -B build` (`GGML_NATIVE` on by default) | 30% less time than the AVX2 archive on this Xeon |
+| Q8_0 weights | `speech quantize` from an F32 file | first audio 0.2 s shorter on a CPU with AMX; no gain without |
 | OpenMP | `-DGGML_OPENMP=ON` | no gain here |
-| Q8_0 weights | `speech quantize` from an F32 file | not measured (Hugging Face ships F16 only) |

@@ -25,6 +25,7 @@ const Storage kMatrix = quantized_storage({{GGML_TYPE_F32, kFirstLayoutRelease},
                                            {GGML_TYPE_Q6_K, "0.8.0"},
                                            {GGML_TYPE_Q5_K, "0.8.0"},
                                            {GGML_TYPE_Q4_K, "0.8.0"}});
+const Storage kEmbedding = embedding_storage(kMatrix.since);
 const Storage kCodecWeight = half_storage();
 const Storage kF32 = float32_storage();
 
@@ -146,17 +147,17 @@ std::vector<TensorSpec> tensors(const ModelFile & m) {
     }
 
     const int64_t h = talker.hidden;
-    std::vector<TensorSpec> t = {{"talker.text_embd", {text_width, text_rows}, kMatrix},
+    std::vector<TensorSpec> t = {{"talker.text_embd", {text_width, text_rows}, kEmbedding},
                                  {"talker.text_proj.fc1.weight", {text_width, text_width}, kMatrix},
                                  {"talker.text_proj.fc1.bias", {text_width}, kF32},
                                  {"talker.text_proj.fc2.weight", {text_width, h}, kMatrix},
                                  {"talker.text_proj.fc2.bias", {h}, kF32},
-                                 {"talker.codec_embd", {h, vocab}, kMatrix},
+                                 {"talker.codec_embd", {h, vocab}, kEmbedding},
                                  {"talker.codec_head", {h, vocab}, kMatrix}};
     add_qwen3_tensors(t, "talker", talker, kMatrix);
     add_qwen3_tensors(t, "cp", cp, kMatrix);
     // The code predictor embeds the codes after a frame's first in the talker's width, since the talker reads them too.
-    add_numbered(t, "cp.codec_embd.", groups - 1, {{"", {h, cp_vocab}, kMatrix}});
+    add_numbered(t, "cp.codec_embd.", groups - 1, {{"", {h, cp_vocab}, kEmbedding}});
     add_numbered(t, "cp.head.", groups - 1, {{"", {cp.hidden, cp_vocab}, kMatrix}});
     // The official model makes small_to_mtp_projection a Linear exactly when the two widths differ (the 1.7B model).
     if (cp.hidden != talker.hidden) add_block(t, "cp.in_proj.", {{"weight", {h, cp.hidden}, kMatrix}, {"bias", {cp.hidden}, kF32}});

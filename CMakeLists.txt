@@ -17,6 +17,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # CI builds the submodule's ggml once, installs it with static libraries, and reuses it while the
 # submodule's commit stays the same; Vulkan's shaders alone take minutes to compile.
 option(SPEECH_INSTALLED_GGML "Link a ggml installed from the submodule, found through CMAKE_PREFIX_PATH" OFF)
+# ggml's CPU backend multiplies matrices with its llamafile kernels (tinyBLAS), which ggml leaves off by default and
+# llama.cpp turns on: on 8 cores of a Xeon under KVM (AVX-512, 2026-10-11) they cut Irodori-TTS's first audio from
+# 1.13 s to 0.66 s and its real-time factor from 0.96 to 0.67 with the F16 file, where ggml's own kernels sum each dot
+# product in another order and so give other bits of the same speech. CI gives the same option to the ggml it builds
+# and installs.
+option(GGML_LLAMAFILE "ggml: use LLAMAFILE" ON)
 if (SPEECH_INSTALLED_GGML)
     find_package(ggml REQUIRED CONFIG)
 else()

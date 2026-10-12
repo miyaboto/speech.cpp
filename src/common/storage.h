@@ -62,6 +62,12 @@ struct Storage {
     };
     std::vector<Choice> choices;
     std::vector<Since> since;
+    /**
+     * Whether ggml_mul_mat() alone reads the tensor, so that a CPU may hold it in a buffer type of its own that packs
+     * it for its matrix product, as ggml's AMX buffer type packs a quantized matrix, in a layout ggml_get_rows() does
+     * not read.
+     */
+    bool product_alone = false;
 };
 
 /**
@@ -71,12 +77,18 @@ struct Storage {
 Storage float32_storage();
 
 /**
- * A matrix that only ggml_mul_mat() and ggml_get_rows() read, which ggml computes from every weight type on the CPU,
- * Metal and Vulkan: in the file's own type; in Q8_0 instead of a K-quant where its rows are not whole blocks of 256
- * values; and in F16 instead of Q8_0 where they are not whole blocks of 32; each type read from the release `since`
- * gives it, which differs from family to family.
+ * A matrix that only ggml_mul_mat() reads, which ggml computes from every weight type on the CPU, Metal and Vulkan:
+ * in the file's own type; in Q8_0 instead of a K-quant where its rows are not whole blocks of 256 values; and in F16
+ * instead of Q8_0 where they are not whole blocks of 32; each type read from the release `since` gives it, which
+ * differs from family to family.
  */
 Storage quantized_storage(std::vector<Since> since);
+
+/**
+ * An embedding, which ggml_get_rows() reads, and ggml_mul_mat() may as well: stored as quantized_storage() stores a
+ * matrix, and held where ggml_get_rows() reads it.
+ */
+Storage embedding_storage(std::vector<Since> since);
 
 /**
  * Float32 in an F32 file and float16 in a file of every other weight type, which every reader of the family takes: a

@@ -3,10 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 
 #include "error.h"
+#include "ggml-cpu.h"
 
 namespace irodori {
 
@@ -22,9 +25,96 @@ namespace irodori {
 
 namespace {
 
+/*
+ * Snake, x + sin(alpha x)^2 / alpha, as one pass on the CPU. As five ggml ops it is half of the decoder's time there
+ * (2026-10-11, 8 cores of a Xeon under KVM, AVX-512): ggml computes sin with libm's scalar sinf, an element at a time,
+ * and each of the other four ops reads and writes every activation again. The sine here is SLEEF's single-precision
+ * one (sinf_u10: the argument reduced by pi in four parts, then an odd polynomial of degree 9), within 1 ulp of a
+ * correctly rounded sine for arguments under 10000 and written as plain arithmetic, so that the compiler vectorizes
+ * the row; a row with an argument of 10000 or more falls back to sinf. The samples of a decode then differ from the
+ * five ops' by rounding alone, far under the error of the codec's own arithmetic. Metal and Vulkan run the five ops.
+ */
+void snake_cpu(ggml_tensor * dst, const ggml_tensor * x, const ggml_tensor * alpha, const ggml_tensor * inv_alpha, int ith, int nth, void *) {
+    const int64_t channels = x->ne[0], rows = ggml_nrows(x);
+    const int64_t first = rows * ith / nth, last = rows * (ith + 1) / nth;
+    const float * a = (const float *) alpha->data, * inv = (const float *) inv_alpha->data;
+    constexpr float one_over_pi = 0.31830988618379067154f;
+    constexpr float pi_a = 3.140625f, pi_b = 0.0009670257568359375f, pi_c = 6.2771141529083251953e-07f, pi_d = 1.2154201256553420762e-10f;
+    // Adding and subtracting 1.5 * 2^23 rounds a float of magnitude under 2^22 to the nearest integer.
+    constexpr float round_shift = 12582912.0f;
+    constexpr uint32_t largest = 0x461c4000u;
+    for (int64_t r = first; r < last; r++) {
+        const float * in = (const float *) ((const char *) x->data + r * x->nb[1]);
+        float * out = (float *) ((char *) dst->data + r * dst->nb[1]);
+        uint32_t beyond = 0;
+        for (int64_t c = 0; c < channels; c++) {
+            uint32_t bits;
+            const float v = in[c] * a[c];
+            std::memcpy(&bits, &v, sizeof bits);
+            beyond |= (bits & 0x7fffffffu) > largest;
+        }
+        if (beyond) {
+            for (int64_t c = 0; c < channels; c++) {
+                const float s = std::sin(in[c] * a[c]);
+                out[c] = in[c] + (s * s) * inv[c];
+            }
+            continue;
+        }
+        for (int64_t c = 0; c < channels; c++) {
+            const float v = in[c] * a[c];
+            const float q = (v * one_over_pi + round_shift) - round_shift;
+            float d = v - q * pi_a;
+            d -= q * pi_b;
+            d -= q * pi_c;
+            d -= q * pi_d;
+            const float d2 = d * d;
+            float u = 2.6083159809786593541503e-06f;
+            u = u * d2 + -0.0001981069071916863322258f;
+            u = u * d2 + 0.00833307858556509017944336f;
+            u = u * d2 + -0.166666597127914428710938f;
+            float s = (d2 * d) * u + d;
+            s = ((int32_t) q & 1) ? -s : s;
+            out[c] = in[c] + (s * s) * inv[c];
+        }
+    }
+}
+
+/** The arguments of im2col_cpu, packed into the custom op's userdata: the piece's first sample and the dilation. */
+void * pack_columns(int64_t first, int dilation) {
+    return (void *) (uintptr_t) (((uint64_t) first << 8) | (uint64_t) dilation);
+}
+
+/*
+ * The columns of a convolution over a piece of the channel-first activation x = dst->src[0]: dst [taps * channels,
+ * samples] holds, for each sample t of the piece, the taps' channels x[t + (k - taps / 2) * dilation] for k from 0,
+ * and zeros where a tap falls outside x, which is the convolution's symmetric padding.
+ */
+void im2col_cpu(ggml_tensor * dst, int ith, int nth, void * userdata) {
+    const ggml_tensor * x = dst->src[0];
+    const uint64_t packed = (uint64_t) (uintptr_t) userdata;
+    const int dilation = (int) (packed & 0xff);
+    const int64_t first = (int64_t) (packed >> 8);
+    const int64_t channels = x->ne[0], samples = x->ne[1], n = dst->ne[1], taps = dst->ne[0] / channels;
+    const int64_t a = n * ith / nth, b = n * (ith + 1) / nth;
+    for (int64_t i = a; i < b; i++) {
+        float * out = (float *) ((char *) dst->data + i * dst->nb[1]);
+        for (int64_t k = 0; k < taps; k++) {
+            const int64_t t = first + i + (k - taps / 2) * dilation;
+            float * column = out + k * channels;
+            if (t < 0 || t >= samples) std::memset(column, 0, (size_t) channels * sizeof(float));
+            else std::memcpy(column, (const char *) x->data + t * x->nb[1], (size_t) channels * sizeof(float));
+        }
+    }
+}
+
+/** The bytes of one piece's columns on the CPU, which bound the memory of a decode however long the speech. */
+constexpr int64_t kColumnsBytes = 32 << 20;
+
 struct Convolutions {
     Graph & g;
     const ModelFile & m;
+    /** Whether the graph runs on the CPU, which computes Snake as one op and a convolution as one matrix product. */
+    bool cpu;
 
     ggml_context * ctx() const { return g.ctx(); }
 
@@ -35,6 +125,29 @@ struct Convolutions {
         return x;
     }
 
+    /**
+     * A convolution of width above 1 on the CPU: the columns of each piece of the input, then one matrix product
+     * by the weight with its taps side by side, so that the product sums the taps where the backends' tap by tap
+     * products sum them in separate passes over the output. The pieces keep the columns, `taps` times the input,
+     * within kColumnsBytes; the output is the first piece's padded to the whole, into which the other pieces are
+     * copied, and the allocator frees it after its last use, where a leaf would live through the graph.
+     */
+    ggml_tensor * conv_columns(ggml_tensor * x, ggml_tensor * w, int dilation) {
+        const int64_t in = w->ne[0], out = w->ne[1], taps = w->ne[2], t = x->ne[1];
+        if (x->nb[0] != sizeof(float)) throw std::logic_error("a convolution on the CPU takes an activation whose channels are contiguous");
+        ggml_tensor * side_by_side = ggml_reshape_2d(ctx(), ggml_cont(ctx(), ggml_permute(ctx(), w, 0, 2, 1, 3)), in * taps, out);
+        const int64_t piece = std::max<int64_t>(1, kColumnsBytes / (taps * in * (int64_t) sizeof(float)));
+        ggml_tensor * y = nullptr;
+        for (int64_t a = 0; a < t; a += piece) {
+            const int64_t n = std::min(piece, t - a);
+            ggml_tensor * columns = ggml_custom_4d(ctx(), GGML_TYPE_F32, in * taps, n, 1, 1, &x, 1, im2col_cpu, GGML_N_TASKS_MAX, pack_columns(a, dilation));
+            ggml_tensor * part = mul_mat(ctx(), side_by_side, columns);
+            if (a == 0) y = n == t ? part : ggml_pad(ctx(), part, 0, (int) (t - n), 0, 0);
+            else g.copy(part, ggml_view_2d(ctx(), y, out, n, y->nb[1], (size_t) a * y->nb[1]));
+        }
+        return y;
+    }
+
     /** A stride-1 convolution with symmetric padding; weight ne = [in, out, k]. */
     ggml_tensor * conv(ggml_tensor * x, const std::string & name, int dilation = 1) {
         ggml_tensor * w = m.tensor(name + ".weight");
@@ -42,6 +155,8 @@ struct Convolutions {
         ggml_tensor * y = nullptr;
         if (k_width == 1) {
             y = mul_mat(ctx(), ggml_reshape_2d(ctx(), w, in, out), x);
+        } else if (cpu) {
+            y = conv_columns(x, w, dilation);
         } else {
             const int64_t p = (k_width - 1) * dilation / 2;
             ggml_tensor * xp = pad(x, p, p);
@@ -85,6 +200,10 @@ struct Convolutions {
 
     /** Snake: x + sin(alpha x)^2 / (alpha + 1e-9). */
     ggml_tensor * snake(ggml_tensor * x, const std::string & name) {
+        if (cpu) {
+            if (!ggml_is_contiguous(x)) throw std::logic_error("Snake on the CPU takes a contiguous activation");
+            return ggml_map_custom3(ctx(), x, m.tensor(name + ".alpha"), m.tensor(name + ".inv_alpha"), snake_cpu, GGML_N_TASKS_MAX, nullptr);
+        }
         ggml_tensor * s = ggml_sin(ctx(), ggml_mul(ctx(), x, m.tensor(name + ".alpha")));
         return ggml_add(ctx(), x, ggml_mul(ctx(), ggml_sqr(ctx(), s), m.tensor(name + ".inv_alpha")));
     }
@@ -114,7 +233,7 @@ Codec::~Codec() {
 }
 
 ggml_tensor * Codec::build_encoder(Graph & g, const std::vector<float> & samples) const {
-    Convolutions l{g, m_};
+    Convolutions l{g, m_, ggml_backend_is_cpu(backend_)};
     const int64_t n = (int64_t) samples.size();
     if (n % hop_ != 0) throw std::runtime_error("the encoder takes a whole number of frames");
     ggml_tensor * x = l.conv(g.input(samples, 1, n), "codec.enc.conv_in");
@@ -152,7 +271,7 @@ std::vector<float> Codec::encode(const std::vector<float> & audio, int window) {
 }
 
 ggml_tensor * Codec::build_decoder(Graph & g, const std::vector<float> & latent, std::vector<ggml_tensor *> * stages) const {
-    Convolutions l{g, m_};
+    Convolutions l{g, m_, ggml_backend_is_cpu(backend_)};
     const int64_t frames = (int64_t) latent.size() / latent_dim_;
     if (frames < 2) throw std::runtime_error("the decoder takes at least two frames at once");
     ggml_tensor * x = l.conv(g.input(latent, latent_dim_, frames), "codec.dec.in_proj");

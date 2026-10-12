@@ -170,8 +170,9 @@ void ModelFile::open(const Layout & layout) {
     check_tensors(layout);
 }
 
-void ModelFile::check_tensors(const Layout & layout) const {
-    const std::vector<TensorSpec> wanted = layout.tensors(*this);
+void ModelFile::check_tensors(const Layout & layout) {
+    specs_ = layout.tensors(*this);
+    const std::vector<TensorSpec> & wanted = specs_;
     std::set<std::string> want;
     for (const TensorSpec & t : wanted) want.insert(t.name);
     std::set<std::string> have;
@@ -204,23 +205,73 @@ void ModelFile::check_tensors(const Layout & layout) const {
     }
 }
 
+namespace {
+
+/**
+ * The buffer types of `device`'s own besides its default, in its order: ggml's CPU device has one per kind of kernel
+ * it packs weights for, the AMX one on an x86 CPU with AMX among them, and a GPU has none.
+ */
+std::vector<ggml_backend_buffer_type_t> extra_buffer_types(ggml_backend_dev_t device) {
+    std::vector<ggml_backend_buffer_type_t> out;
+    ggml_backend_reg_t reg = device ? ggml_backend_dev_backend_reg(device) : nullptr;
+    const auto get = reg ? (ggml_backend_dev_get_extra_bufts_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_get_extra_bufts") : nullptr;
+    for (ggml_backend_buffer_type_t * b = get ? get(device) : nullptr; b && *b; b++) out.push_back(*b);
+    return out;
+}
+
+}  // namespace
+
+/*
+ * A quantized matrix that ggml_mul_mat() alone reads goes into the first extra buffer type that computes the product
+ * by it, asked through a probe of the tensor's shape and type held in a buffer of that type, as ggml's own loaders
+ * ask; the rest goes into the backend's default buffer type. The AMX buffer type packs Q8_0 and the K-quants into its
+ * tiles' order: on 8 cores of a Xeon under KVM (2026-10-11) it multiplied a Q8_0 matrix of 1280 by 3680 by 91
+ * columns in 0.30 ms where the default buffer type took 1.26 ms, with the same values, while an F16 matrix through
+ * it took longer than through the default one, so F16 and F32 stay in the default type. An embedding stays there too,
+ * since ggml_get_rows() reads the bytes as the file stores them.
+ */
 void ModelFile::load(ggml_backend_t backend, const std::function<bool(const std::string & name)> & keep) {
-    loaded_ = ctx_.get();
-    if (keep) {
-        const int64_t n = gguf_get_n_tensors(gguf_.get());
-        ggml_init_params params = {ggml_tensor_overhead() * (size_t) std::max<int64_t>(n, 1), nullptr, true};
-        kept_.reset(ggml_init(params));
-        if (!kept_) throw Error(Fault::OutOfMemory, "cannot create a ggml context for the tensors of " + path_);
-        for (int64_t i = 0; i < n; i++) {
-            const char * name = gguf_get_tensor_name(gguf_.get(), i);
-            if (keep(name)) ggml_set_name(ggml_dup_tensor(kept_.get(), ggml_get_tensor(ctx_.get(), name)), name);
-        }
-        loaded_ = kept_.get();
+    ggml_backend_dev_t device = ggml_backend_get_device(backend);
+    std::vector<ggml_backend_buffer_type_t> types = {ggml_backend_get_default_buffer_type(backend)};
+    std::vector<std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)>> probes;
+    for (ggml_backend_buffer_type_t extra : extra_buffer_types(device)) {
+        ggml_backend_buffer_t probe = ggml_backend_buft_alloc_buffer(extra, 1);
+        if (!probe) continue;
+        probes.emplace_back(probe, ggml_backend_buffer_free);
+        types.push_back(extra);
     }
-    buffer_.reset(ggml_backend_alloc_ctx_tensors(loaded_, backend));
-    if (!buffer_) throw Error(Fault::OutOfMemory, "cannot allocate the weights of " + path_ + " on " + ggml_backend_name(backend));
-    ggml_backend_buffer_set_usage(buffer_.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    for (ggml_tensor * t = ggml_get_first_tensor(loaded_); t; t = ggml_get_next_tensor(loaded_, t)) by_name_.emplace(ggml_get_name(t), t);
+    const int64_t n = gguf_get_n_tensors(gguf_.get());
+    ggml_init_params scratch_params = {ggml_tensor_overhead() * 3 * (size_t) std::max<int64_t>(n, 1), nullptr, true};
+    std::unique_ptr<ggml_context, decltype(&ggml_free)> scratch(ggml_init(scratch_params), ggml_free);
+    if (!scratch) throw Error(Fault::OutOfMemory, "cannot create a ggml context for the tensors of " + path_);
+    std::vector<std::vector<ggml_tensor *>> groups(types.size());
+    for (const TensorSpec & spec : specs_) {
+        if (keep && !keep(spec.name)) continue;
+        ggml_tensor * t = ggml_get_tensor(ctx_.get(), spec.name.c_str());
+        size_t chosen = 0;
+        if (spec.storage.get().product_alone && ggml_is_quantized(t->type) && t->ne[2] == 1 && t->ne[3] == 1) {
+            for (size_t i = 1; i < types.size() && chosen == 0; i++) {
+                ggml_tensor * weight = ggml_dup_tensor(scratch.get(), t);
+                weight->buffer = probes[i - 1].get();
+                ggml_tensor * product = ggml_mul_mat(scratch.get(), weight, ggml_new_tensor_2d(scratch.get(), GGML_TYPE_F32, t->ne[0], 512));
+                if (ggml_backend_dev_supports_op(device, product)) chosen = i;
+            }
+        }
+        groups[chosen].push_back(t);
+    }
+    for (size_t i = 0; i < types.size(); i++) {
+        if (groups[i].empty()) continue;
+        Loaded loaded;
+        ggml_init_params params = {ggml_tensor_overhead() * groups[i].size(), nullptr, true};
+        loaded.ctx.reset(ggml_init(params));
+        if (!loaded.ctx) throw Error(Fault::OutOfMemory, "cannot create a ggml context for the tensors of " + path_);
+        for (ggml_tensor * t : groups[i]) ggml_set_name(ggml_dup_tensor(loaded.ctx.get(), t), ggml_get_name(t));
+        loaded.buffer.reset(ggml_backend_alloc_ctx_tensors_from_buft(loaded.ctx.get(), types[i]));
+        if (!loaded.buffer) throw Error(Fault::OutOfMemory, "cannot allocate the weights of " + path_ + " on " + ggml_backend_name(backend));
+        ggml_backend_buffer_set_usage(loaded.buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        for (ggml_tensor * t = ggml_get_first_tensor(loaded.ctx.get()); t; t = ggml_get_next_tensor(loaded.ctx.get(), t)) by_name_.emplace(ggml_get_name(t), t);
+        loaded_.push_back(std::move(loaded));
+    }
 
     std::unique_ptr<FILE, decltype(&std::fclose)> f(ggml_fopen(path_.c_str(), "rb"), &std::fclose);
     if (!f) throw Error(Fault::Io, "cannot open " + path_);
@@ -228,8 +279,9 @@ void ModelFile::load(ggml_backend_t backend, const std::function<bool(const std:
     std::vector<uint8_t> piece;
     for (int64_t i = 0; i < gguf_get_n_tensors(gguf_.get()); i++) {
         const char * name = gguf_get_tensor_name(gguf_.get(), i);
-        ggml_tensor * t = ggml_get_tensor(loaded_, name);
-        if (!t) continue;
+        const auto it = by_name_.find(name);
+        if (it == by_name_.end()) continue;
+        ggml_tensor * t = it->second;
         const size_t size = ggml_nbytes(t);
         bool read = seek_file(f.get(), data_offset + gguf_get_tensor_offset(gguf_.get(), i));
         for (size_t done = 0; read && done < size;) {
