@@ -134,7 +134,8 @@ ModelFile::ModelFile(const std::string & path, ggml_backend_t backend, const Lay
                      const std::function<bool(const std::string & name)> & keep)
     : path_(path), architecture_(layout.architecture), remedy_(layout.remedy) {
     open(layout);
-    load(backend, keep);
+    allocate(backend, keep);
+    load();
 }
 
 ModelFile::ModelFile(const std::string & path, const Layout & layout)
@@ -142,10 +143,17 @@ ModelFile::ModelFile(const std::string & path, const Layout & layout)
     open(layout);
 }
 
+ModelFile::ModelFile(const ModelFile & source, ggml_backend_t backend, const std::function<bool(const std::string & name)> & keep)
+    : path_(source.path_), architecture_(source.architecture_), remedy_(source.remedy_), version_(source.version_), gguf_(source.gguf_),
+      ctx_(source.ctx_), specs_(source.specs_) {
+    allocate(backend, keep ? keep : [](const std::string &) { return true; });
+    for (const auto & [name, t] : by_name_) ggml_backend_tensor_copy(source.tensor(name), t);
+}
+
 void ModelFile::open(const Layout & layout) {
     ggml_context * ctx = nullptr;
     gguf_ = open_gguf(path_, &ctx);
-    ctx_.reset(ctx);
+    ctx_.reset(ctx, ggml_free);
     require_layout_key(gguf_.get(), path_, remedy_);
     const int64_t id = gguf_find_key(gguf_.get(), "general.architecture");
     if (id < 0 || gguf_get_kv_type(gguf_.get(), id) != GGUF_TYPE_STRING) {
@@ -230,7 +238,7 @@ std::vector<ggml_backend_buffer_type_t> extra_buffer_types(ggml_backend_dev_t de
  * it took longer than through the default one, so F16 and F32 stay in the default type. An embedding stays there too,
  * since ggml_get_rows() reads the bytes as the file stores them.
  */
-void ModelFile::load(ggml_backend_t backend, const std::function<bool(const std::string & name)> & keep) {
+void ModelFile::allocate(ggml_backend_t backend, const std::function<bool(const std::string & name)> & keep) {
     ggml_backend_dev_t device = ggml_backend_get_device(backend);
     std::vector<ggml_backend_buffer_type_t> types = {ggml_backend_get_default_buffer_type(backend)};
     std::vector<std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)>> probes;
@@ -272,7 +280,9 @@ void ModelFile::load(ggml_backend_t backend, const std::function<bool(const std:
         for (ggml_tensor * t = ggml_get_first_tensor(loaded.ctx.get()); t; t = ggml_get_next_tensor(loaded.ctx.get(), t)) by_name_.emplace(ggml_get_name(t), t);
         loaded_.push_back(std::move(loaded));
     }
+}
 
+void ModelFile::load() {
     std::unique_ptr<FILE, decltype(&std::fclose)> f(ggml_fopen(path_.c_str(), "rb"), &std::fclose);
     if (!f) throw Error(Fault::Io, "cannot open " + path_);
     const uint64_t data_offset = gguf_get_data_offset(gguf_.get());
@@ -386,6 +396,12 @@ int64_t ModelFile::width(const std::string & name, int axis) const {
                          " takes a width from 1 to " + std::to_string(INT_MAX) + " on its axis " + std::to_string(axis) + "; " + remedy_);
     }
     return t->ne[axis];
+}
+
+ggml_type ModelFile::stored_type(const std::string & name) const {
+    const ggml_tensor * t = ggml_get_tensor(ctx_.get(), name.c_str());
+    if (!t) throw file_error(path_ + " does not hold the tensor " + name + ", which " + layout_name() + " calls for; " + remedy_);
+    return t->type;
 }
 
 int64_t ModelFile::tensor_count() const {

@@ -57,12 +57,21 @@ README.md and `docs/` are the documentation for users; what a developer needs is
   recognition model (`speech-api-recognition.c`), and with `detect`, with a detection model (`speech-api-detection.c`,
   and detections of audio given a piece at a time in `speech-api-detection-stream.c`), what they share in
   `speech-api-common.c` and what differs by the operating system in `speech-api-platform.c`. Checks reach into `src/`
-  for the stage they check; they are built but not released. `checks/compare/` holds the scripts that compare two builds
-  or releases: the audio of the same requests bit for bit (`same_audio.py`), the files `speech quantize` makes with the
-  converters' (`quantize_compare.py`) and the first release that reads each (`quantize_releases.py`).
-- `measure/` holds what measures and passes or fails nothing: the times of Qwen3-ASR's stages (`qwen3-asr-timing.cpp`,
-  built with the checks), of llama.cpp's llama-server on the same audio and of Irodori-TTS with and without a caption,
-  and the accuracy of each longest region of transcription by regions (`region_cap_compare.py`).
+  for the stage they check; they are built but not released. `checks/run.py` runs the stage checks of the families and
+  devices it is given, with the model files and the dumps it finds, in the order data flows, one line per check.
+  `checks/compare/` holds the scripts that compare two builds or releases: the audio of the same requests bit for bit
+  (`same_audio.py`), the files `speech quantize` makes with the converters' (`quantize_compare.py`) and the first
+  release that reads each (`quantize_releases.py`).
+- `measure/` holds what measures and passes or fails nothing: the times of the stages of Qwen3-ASR, FastConformer,
+  Qwen3-TTS and Irodori-TTS (`<family>-timing.cpp`, built with the checks), of llama.cpp's llama-server on Qwen3-ASR's
+  dumps and of Irodori-TTS with and without a caption, the accuracy of each longest region of transcription by regions
+  (`region_cap_compare.py`), and how late live transcription over `/v1/realtime` is for one build or two on the same
+  recordings (`live_latency.py`). speech.cpp keeps what passes or fails (the checks, the smoke scripts and
+  `checks/compare/`) and what measures from inside the library or its entry points: the time of each stage and the
+  delay of live transcription. speech-bench (github.com/nyosegawa/speech-bench) measures what a user sees of a whole
+  request (speed, latency, memory and accuracy) across speech.cpp's builds and other runtimes, and tries a model in its
+  official implementation and the runtimes that already run it before speech.cpp takes it up, so any other comparison
+  of builds or of runtimes goes there and not into `measure/`.
 - `tools/server/` holds `speech serve`, which serves a synthesis, a recognition and a detection model over HTTP with
   OpenAI's audio API (`POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, `GET /v1/models`, `GET /health`)
   and OpenAI's Realtime transcription over a WebSocket at `/v1/realtime`, for programs that speak HTTP. Like the worker
@@ -89,7 +98,7 @@ README.md and `docs/` are the documentation for users; what a developer needs is
   `pins.py`, which pins the checkpoints by revision, the conversion of the official weights to one GGUF file per
   model, and the scripts that run the official implementation to dump reference tensors. Dumps go to
   `reference/<model>/out/`. `reference/resample/` does the same for the resampler of `src/common/`, against
-  torchaudio.
+  torchaudio. `reference/npy_to_wav.py` writes the audio of a dump as a WAVE file.
 
 Keep these boundaries explicit: code does not reach past its module for an operation that belongs to
 another one.
@@ -103,8 +112,10 @@ another one.
   one executable beside the shared library `libspeech`, which exports the C API and nothing else, for bindings and
   other programs.
 - The submodule is the branch `speech.cpp` of github.com/nyosegawa/ggml: an upstream tag of ggml-org/ggml, a commit of
-  `test-backend-ops` cases, and one commit for each defect of the tag that speech.cpp's models meet, which its cases
-  show. A defect of ggml is fixed there, with its cases, rather than avoided in speech.cpp.
+  `test-backend-ops` cases, one commit for each defect of the tag that speech.cpp's models meet, which its cases
+  show, and one commit for each speed-up of speech.cpp's models that the tag lacks, with cases that show it correct
+  and its effect measured on Metal and on Vulkan. A defect of ggml is fixed there, with its cases, rather than avoided
+  in speech.cpp.
 - Anything the C API returns is owned by the library, and the header says for how long. A model serves one
   request at a time, and the header says which functions any thread may call.
 - The GGUF layout is this repository's own: one file per model, its codec included, written by
@@ -118,14 +129,15 @@ another one.
   release that reads it to the converter's table and brings the previous layout up in the family's one upgrade
   function. Every model constant lives in the file, from the checkpoint or, where it has none, from the official code,
   and the converter says where.
-- Do not add fallback behavior; fail loudly rather than degrade silently. A GGUF without a key or tensor, a key
-  of another type, a tensor the keys do not call for, a layout the reader does not know,
-  a text longer than the model takes, a WAVE format that is not understood and a device that does not
-  start all throw an `Error` of their kind with a message (`src/common/error.h`), naming the input at fault where
-  there is one; the C API returns each with its category, which every subcommand passes on: the worker as `error` or
-  `fatal`, the server as OpenAI's error by the category alone, and the command line as `speech: <code> (<option>)`. Nothing
-  is truncated or moved to another device behind the caller's back, and the library checks what it is given before
-  ggml sees it, so that no input makes ggml abort the process.
+- Do not add fallback behavior; fail loudly rather than degrade silently. A GGUF without a key or tensor, a key of
+  another type, a tensor the keys do not call for, a layout the reader does not know, a text longer than the model
+  takes, a WAVE format that is not understood and a device that does not start all throw an `Error` of their kind with a
+  message (`src/common/error.h`), naming the input at fault where there is one; the C API returns each with its
+  category, which every subcommand passes on: the worker as `error` or `fatal`, the server as OpenAI's error by the
+  category alone, and the command line as `speech: <code> (<option>)`. Nothing is truncated or moved to another device
+  behind the caller's back: a part of a model's work that runs on another device by design is on the model's page, with
+  a request option that keeps it on the model's device. The library checks what it is given before ggml sees it, so that
+  no input makes ggml abort the process.
 - Fix a defect where its cause is, in a form in which it cannot happen, rather than with a guard for the
   one case that showed it; the code after the fix reads better than before. When a fix is much larger
   than the defect, or needs a choice only the user can make, stop and ask instead of patching.
@@ -180,6 +192,9 @@ another one.
   as data: texts to speak and model output. The one exception is README.ja.md, README.md in Japanese, which says what
   README.md says; a pull request that changes README.md changes README.ja.md the same way.
 - An error message names what failed and what to do.
+- Speed is RTFx, the seconds of audio over the seconds they took, so that larger is faster, as Hugging Face's Open ASR
+  Leaderboard gives it. The other figures take their common names: the time to first audio of a synthesis, the load
+  time, the peak memory, and latencies as p50, p90 and p99. The tools' output and the documentation say them alike.
 
 ## Decisions
 
@@ -193,7 +208,8 @@ comment.
 ## Workflow
 
 - Build with `cmake -B build && cmake --build build -j`, and run the checks the change touches before
-  committing code. A change to the C API or the worker also runs `speech-api-check` and
+  committing code, a family's stage checks with `python3 checks/run.py <family> --devices cpu,gpu`. A change to the C
+  API or the worker also runs `speech-api-check` and
   `checks/smoke/worker_smoke.py` for both synthesis families, and `speech-api-check transcribe` and
   `checks/smoke/worker_recognition_smoke.py` for both recognition families, and `speech-api-check detect` with Silero
   VAD; a change to the server runs `checks/smoke/server_smoke.py`, `checks/smoke/server_realtime_smoke.py` and
@@ -224,8 +240,10 @@ holds steps these rules do not repeat.
 - `adr`: a decision settled or an approach turned down for good, a change that contradicts a record, or tidying
   `docs/adr/`.
 - `docs`: a change that alters what a user does or sees, or writing a page of README.md or `docs/`.
-- `pull-request`: starting a change, committing, opening a pull request, its review and CI, merging, cleaning up, and
-  taking back a subagent's branch.
+- `ggml-fork`: a fix or a speed-up in the ggml fork, its `test-backend-ops` cases, and moving the submodule.
+- `pull-request`: starting a change, committing, opening a pull request, its review and CI, stacked pull requests,
+  merging, cleaning up, and taking back a subagent's branch.
 - `release`: model files and cards on Hugging Face, the catalog, the numbers measured again, raising `VERSION`, the
   README's screenshots of the page, the tag and checking the release.
+- `speed-up`: making a model faster or smaller in memory, measuring the gain and checking the output.
 - `windows-check`: checking a change on a Windows machine with a Vulkan GPU.

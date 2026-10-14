@@ -72,6 +72,7 @@ add_library(qwen3tts STATIC
     src/families/qwen3-tts/talker.cpp
     src/families/qwen3-tts/prompt.cpp
     src/families/qwen3-tts/sampler.cpp
+    src/families/qwen3-tts/graph-sampler.cpp
     src/families/qwen3-tts/synthesizer.cpp
 )
 # Code names the family in its includes ("qwen3-tts/codec.h"), since both families have a codec.h.
@@ -83,6 +84,7 @@ add_library(irodoritts STATIC
     src/families/irodori-tts/text-normalizer.cpp
     src/families/irodori-tts/tokenizer.cpp
     src/families/irodori-tts/text-encoder.cpp
+    src/families/irodori-tts/layers.cpp
     src/families/irodori-tts/loudness.cpp
     src/families/irodori-tts/codec.cpp
     src/families/irodori-tts/reference.cpp
@@ -288,12 +290,18 @@ add_executable(qwen3-tts-sampler-check checks/qwen3-tts/qwen3-tts-sampler-check.
 target_include_directories(qwen3-tts-sampler-check PRIVATE checks tools/common)
 target_link_libraries(qwen3-tts-sampler-check PRIVATE qwen3tts)
 
+# The picks built into a graph against the sampler, on the same cases, on the CPU or a GPU.
+add_executable(qwen3-tts-graph-sampler-check checks/qwen3-tts/qwen3-tts-graph-sampler-check.cpp tools/common/json-reader.cpp)
+target_include_directories(qwen3-tts-graph-sampler-check PRIVATE checks tools/common)
+target_link_libraries(qwen3-tts-graph-sampler-check PRIVATE qwen3tts)
+
 # The tokenizer of a Qwen3-TTS or a Qwen3-ASR file, each its family's.
 add_executable(tokenizer-check checks/common/tokenizer-check.cpp)
 target_link_libraries(tokenizer-check PRIVATE qwen3tts qwen3asr)
 
 # The decoder's runs in blocks, on the talker of a Qwen3-TTS file.
 add_executable(qwen3-decoder-check checks/common/qwen3-decoder-check.cpp)
+target_include_directories(qwen3-decoder-check PRIVATE checks)
 target_link_libraries(qwen3-decoder-check PRIVATE qwen3tts)
 
 add_executable(irodori-text-check checks/irodori-tts/irodori-text-check.cpp)
@@ -376,6 +384,13 @@ target_link_libraries(qwen3-asr-timing PRIVATE qwen3asr)
 add_executable(irodori-timing measure/irodori-timing.cpp)
 target_include_directories(irodori-timing PRIVATE checks)
 target_link_libraries(irodori-timing PRIVATE irodoritts)
+
+# Times the stages of a synthesis on the texts given.
+add_executable(qwen3-tts-timing measure/qwen3-tts-timing.cpp)
+target_link_libraries(qwen3-tts-timing PRIVATE qwen3tts)
+
+add_executable(irodori-tts-timing measure/irodori-tts-timing.cpp)
+target_link_libraries(irodori-tts-timing PRIVATE irodoritts)
 
 # Silero VAD's stages and regions against the dumps of reference/silero-vad/dump.py, read with the JSON reader of `speech`.
 add_executable(silero-vad-check checks/silero-vad/silero-vad-check.cpp tools/common/json-reader.cpp)

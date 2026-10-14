@@ -2,9 +2,10 @@
 // reference/irodori-tts/dump.py made with the same model, the dump's text spoken in the voice of the dump's
 // reference latent, of its embedding, or without a reference, from the dump's noise and with its request's length,
 // steps, guidance and cut at the tail, against the audio the official synthesize() returned, the cut at the tail
-// included.
+// included. The DiT attends as it chooses on the device, or as the last argument forces it, so that both attentions are
+// checked on a GPU.
 //
-// usage: irodori-synthesis-check <model.gguf> <reference out dir> [gpu|cpu|device name]
+// usage: irodori-synthesis-check <model.gguf> <reference out dir> [gpu|cpu|device name] [flash|products]
 
 #include <algorithm>
 #include <cstdio>
@@ -15,8 +16,10 @@
 #include "backend.h"
 #include "compare.h"
 #include "irodori-dumps.h"
+#include "irodori-tts/layout.h"
 #include "irodori-tts/synthesizer.h"
 #include "npy.h"
+#include "weight-types.h"
 
 using namespace irodori;
 
@@ -44,13 +47,18 @@ double least_snr_db(const std::string & dump) {
 int main(int argc, char ** argv) {
     const std::vector<std::string> args = utf8_args(argc, argv);
     if (args.size() < 3) {
-        std::fprintf(stderr, "usage: %s <model.gguf> <reference out dir> [gpu|cpu|device name]\n", args[0].c_str());
+        std::fprintf(stderr, "usage: %s <model.gguf> <reference out dir> [gpu|cpu|device name] [flash|products]\n", args[0].c_str());
         return 2;
     }
     try {
+        if (!takes_weights(args[1], model_layout, {"F32", "F16"},
+                           "quantized weights carry the latent and the length further than its bound")) {
+            return 2;
+        }
         ggml_backend_t backend = init_backend(args.size() > 3 ? args[3] : "");
         std::printf("backend: %s\n", ggml_backend_name(backend));
-        Synthesizer synth(args[1], backend);
+        Synthesizer synth(args[1], backend, forced_attention(args, 4));
+        std::printf("DiT: %s\n", attention_name(synth.attention()));
         const bool meanflow = synth.model().str("irodori-tts.flow") == "meanflow";
         const std::vector<IrodoriDump> dumps = irodori_dumps(args[2], synth.model().str("general.source.repo_url"), "audio.npy");
         bool ok = !dumps.empty();
@@ -99,7 +107,7 @@ int main(int argc, char ** argv) {
             std::printf("%s: %zu samples (official %zu), %d frames\n", name.c_str(), audio.size(), official.f32.size(),
                         stats.frames);
             print_diff("  audio against the official", da);
-            std::printf("  first audio %.3f s: text and duration %.3f s, sampling %.3f s, codec %.3f s in all\n", stats.first_audio,
+            std::printf("  time to first audio %.3f s: text and duration %.3f s, sampling %.3f s, codec %.3f s in all\n", stats.first_audio,
                         stats.text, stats.sampling, stats.codec);
             ok = ok && audio.size() == official.f32.size() && da.snr_db > least_snr_db(name);
         }
